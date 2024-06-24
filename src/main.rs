@@ -80,7 +80,7 @@ impl LanguageServer for Backend {
         };
         let meta = fetch_latest_version(&package_name)
             .await
-            .ok_or_else(|| tower_lsp::jsonrpc::Error::internal_error())?;
+            .ok_or_else(tower_lsp::jsonrpc::Error::internal_error)?;
         let offset = format_time(meta.date);
         Ok(Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
