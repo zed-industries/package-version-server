@@ -588,25 +588,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "node_package_version_checker"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "chrono-humanize",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "time",
- "time-format",
- "tokio",
- "tower-lsp",
- "tree-sitter",
- "tree-sitter-json",
- "urlencoding",
-]
-
-[[package]]
 name = "num-conv"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -688,6 +669,23 @@ dependencies = [
  "libc",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "package-version-server"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "chrono-humanize",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
+ "tower-lsp",
+ "tree-sitter",
+ "tree-sitter-json",
+ "urlencoding",
 ]
 
 [[package]]
@@ -1088,12 +1086,6 @@ name = "time-core"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef927ca75afb808a4d64dd374f00a2adf8d0fcff8e7b184af886c3c87ec4a3f3"
-
-[[package]]
-name = "time-format"
-version = "1.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42baec394ad2773a90e037d7b6dfc7518d1f121b9dbaeebad42e19568c39f196"
 
 [[package]]
 name = "time-macros"
