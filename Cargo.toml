@@ -14,3 +14,5 @@ time-format = "1.1.2"
 time = {version = "0.3.36", features = ["parsing"]}
 chrono-humanize = "0.2.3"
 chrono = "0.4.38"
+tree-sitter-json = "0.21.0"
+tree-sitter = "0.22.6"
