@@ -131,6 +131,10 @@ async fn fetch_latest_version(package_name: &str) -> Option<MetadataFromRegistry
 
 #[tokio::main]
 async fn main() {
+    if let Some(_) = std::env::args().nth(1).filter(|arg| arg == "--version") {
+        println!("package-version-server {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
