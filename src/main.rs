@@ -162,6 +162,7 @@ struct MetadataFromRegistry {
 }
 
 async fn fetch_latest_version(package_name: &str) -> Option<MetadataFromRegistry> {
+    let package_name = urlencoding::encode(package_name);
     let url = format!("https://registry.npmjs.org/{}", package_name);
     let resp = reqwest::get(url).await.ok()?.json::<Value>().await.ok()?;
     let version = resp["dist-tags"]["latest"].as_str()?;
