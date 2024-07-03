@@ -1,3 +1,4 @@
+mod fetcher;
 mod parser;
 
 use std::collections::HashMap;
@@ -5,33 +6,24 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, FixedOffset};
 use chrono_humanize::{Accuracy, HumanTime, Tense};
-use serde_json::Value;
+use fetcher::PackageVersionFetcher;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 struct Backend {
-    lsp_client: Client,
+    client: Client,
     file_contents: Arc<Mutex<HashMap<Url, Arc<str>>>>,
-    client: reqwest::Client,
+    fetcher: PackageVersionFetcher,
 }
-static APP_USER_AGENT: &str = concat!(
-    env!("CARGO_PKG_NAME"),
-    "/",
-    env!("CARGO_PKG_VERSION"),
-    " By Zed Industries"
-);
 
 impl Backend {
     fn new(lsp_client: Client) -> Result<Self> {
-        let client = reqwest::Client::builder()
-            .user_agent(APP_USER_AGENT)
-            .build()
-            .map_err(|_| tower_lsp::jsonrpc::Error::internal_error())?;
         Ok(Self {
-            lsp_client,
+            client: lsp_client,
             file_contents: Default::default(),
-            client,
+            fetcher: PackageVersionFetcher::new()
+                .map_err(|_| tower_lsp::jsonrpc::Error::internal_error())?,
         })
     }
 }
@@ -56,7 +48,7 @@ impl LanguageServer for Backend {
     }
 
     async fn initialized(&self, _: InitializedParams) {
-        self.lsp_client
+        self.client
             .log_message(MessageType::INFO, "Language server initialized.")
             .await;
     }
@@ -93,7 +85,9 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        let meta = fetch_latest_version(&self.client, &package_name)
+        let meta = self
+            .fetcher
+            .get(&package_name)
             .await
             .ok_or_else(tower_lsp::jsonrpc::Error::internal_error)?;
         let offset = format_time(meta.date);
@@ -114,41 +108,6 @@ impl LanguageServer for Backend {
 fn format_time(time: DateTime<FixedOffset>) -> String {
     let ht = HumanTime::from(time);
     ht.to_text_en(Accuracy::Rough, Tense::Past)
-}
-struct MetadataFromRegistry {
-    version: String,
-    description: String,
-    homepage: String,
-    date: DateTime<FixedOffset>,
-}
-
-async fn fetch_latest_version(
-    client: &reqwest::Client,
-    package_name: &str,
-) -> Option<MetadataFromRegistry> {
-    let package_name = urlencoding::encode(package_name);
-    let url = format!("https://registry.npmjs.org/{}", package_name);
-    let resp = client
-        .get(url)
-        .send()
-        .await
-        .ok()?
-        .json::<Value>()
-        .await
-        .ok()?;
-    let version = resp["dist-tags"]["latest"].as_str()?;
-    let version_info = &resp["versions"][version];
-    let version_str = version_info["version"].as_str()?.to_string();
-    let description = version_info["description"].as_str()?.to_string();
-    let homepage = version_info["homepage"].as_str()?.to_string();
-    let date_str = resp["time"][version].as_str()?;
-    let date = DateTime::parse_from_rfc3339(date_str).ok()?;
-    Some(MetadataFromRegistry {
-        version: version_str,
-        description,
-        homepage,
-        date,
-    })
 }
 
 #[tokio::main]
