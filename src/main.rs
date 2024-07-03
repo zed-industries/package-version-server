@@ -11,15 +11,27 @@ use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 struct Backend {
-    client: Client,
+    lsp_client: Client,
     file_contents: Arc<Mutex<HashMap<Url, Arc<str>>>>,
+    client: reqwest::Client,
 }
+static APP_USER_AGENT: &str = concat!(
+    env!("CARGO_PKG_NAME"),
+    "/",
+    env!("CARGO_PKG_VERSION"),
+    " By Zed Industries"
+);
 
 impl Backend {
-    fn new(client: Client) -> Result<Self> {
+    fn new(lsp_client: Client) -> Result<Self> {
+        let client = reqwest::Client::builder()
+            .user_agent(APP_USER_AGENT)
+            .build()
+            .map_err(|_| tower_lsp::jsonrpc::Error::internal_error())?;
         Ok(Self {
-            client,
+            lsp_client,
             file_contents: Default::default(),
+            client,
         })
     }
 }
@@ -44,7 +56,7 @@ impl LanguageServer for Backend {
     }
 
     async fn initialized(&self, _: InitializedParams) {
-        self.client
+        self.lsp_client
             .log_message(MessageType::INFO, "Language server initialized.")
             .await;
     }
@@ -81,7 +93,7 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        let meta = fetch_latest_version(&package_name)
+        let meta = fetch_latest_version(&self.client, &package_name)
             .await
             .ok_or_else(tower_lsp::jsonrpc::Error::internal_error)?;
         let offset = format_time(meta.date);
@@ -110,10 +122,20 @@ struct MetadataFromRegistry {
     date: DateTime<FixedOffset>,
 }
 
-async fn fetch_latest_version(package_name: &str) -> Option<MetadataFromRegistry> {
+async fn fetch_latest_version(
+    client: &reqwest::Client,
+    package_name: &str,
+) -> Option<MetadataFromRegistry> {
     let package_name = urlencoding::encode(package_name);
     let url = format!("https://registry.npmjs.org/{}", package_name);
-    let resp = reqwest::get(url).await.ok()?.json::<Value>().await.ok()?;
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .ok()?
+        .json::<Value>()
+        .await
+        .ok()?;
     let version = resp["dist-tags"]["latest"].as_str()?;
     let version_info = &resp["versions"][version];
     let version_str = version_info["version"].as_str()?.to_string();
