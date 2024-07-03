@@ -75,12 +75,12 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        let package_name_pair =
-            parser::extract_package_name(document, params.text_document_position_params.position);
-
-        let Some(package_name) = package_name_pair else {
+        let Some(package_name) =
+            parser::extract_package_name(document, params.text_document_position_params.position)
+        else {
             return Ok(None);
         };
+
         let meta = fetch_latest_version(&package_name)
             .await
             .ok_or_else(tower_lsp::jsonrpc::Error::internal_error)?;
@@ -131,7 +131,11 @@ async fn fetch_latest_version(package_name: &str) -> Option<MetadataFromRegistry
 
 #[tokio::main]
 async fn main() {
-    if let Some(_) = std::env::args().nth(1).filter(|arg| arg == "--version") {
+    if std::env::args()
+        .nth(1)
+        .filter(|arg| arg == "--version")
+        .is_some()
+    {
         println!("package-version-server {}", env!("CARGO_PKG_VERSION"));
         return;
     }

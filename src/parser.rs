@@ -22,8 +22,8 @@ pub fn extract_package_name(text: Arc<str>, position: Position) -> Option<String
                     (pair
                         key: (string (string_content) @name)
                         value: (string)
-                    )
-                )
+                    ) @_dep_specifier
+                )+
             (#any-of? @root_name "dependencies" "devDependencies" "peerDependencies" "optionalDependencies" "bundledDependencies" "bundleDependencies")
         )+
     "#;
@@ -33,10 +33,9 @@ pub fn extract_package_name(text: Arc<str>, position: Position) -> Option<String
 
     let root_node = tree.root_node();
     let matches = cursor.matches(&query, root_node, text.as_bytes());
-    let mut package_name = None;
     let capture_names = query.capture_names();
     for m in matches {
-        package_name.take();
+        let mut package_name = None;
         let mut matched = false;
         for capture in m.captures {
             let capture_name = capture_names[capture.index as usize];
@@ -52,8 +51,7 @@ pub fn extract_package_name(text: Arc<str>, position: Position) -> Option<String
             return package_name;
         }
     }
-
-    package_name
+    None
 }
 
 #[cfg(test)]
