@@ -41,6 +41,8 @@ pub fn extract_package_name(text: Arc<str>, position: Position) -> Option<String
             let capture_name = capture_names[capture.index as usize];
             if capture_name == "name" {
                 package_name = Some(capture.node.utf8_text(text.as_bytes()).ok()?.to_string());
+            } else if capture_name == "root_name" {
+                continue;
             }
             let node_range = capture.node.range();
             if node_range.start_point <= point && node_range.end_point >= point {
