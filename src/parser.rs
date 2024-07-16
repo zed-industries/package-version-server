@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use tower_lsp::lsp_types::Position;
+use tower_lsp::lsp_types::{Position, Range};
 use tree_sitter::{Parser, Point, Query, QueryCursor};
 use tree_sitter_json::language;
 
-pub fn extract_package_name(text: Arc<str>, position: Position) -> Option<String> {
+pub fn extract_package_name(text: Arc<str>, position: Position) -> Option<(String, Range)> {
     let mut parser = Parser::new();
     parser.set_language(&language()).ok()?;
 
@@ -21,7 +21,7 @@ pub fn extract_package_name(text: Arc<str>, position: Position) -> Option<String
                 (object
                     (pair
                         key: (string (string_content) @name)
-                        value: (string)
+                        value: (string (string_content) @version)
                     ) @_dep_specifier
                 )+
             (#any-of? @root_name "dependencies" "devDependencies" "peerDependencies" "optionalDependencies" "bundledDependencies" "bundleDependencies")
@@ -36,7 +36,7 @@ pub fn extract_package_name(text: Arc<str>, position: Position) -> Option<String
     let capture_names = query.capture_names();
     for m in matches {
         let mut package_name = None;
-        let mut matched = false;
+        let mut match_range = None;
         for capture in m.captures {
             let capture_name = capture_names[capture.index as usize];
             if capture_name == "name" {
@@ -46,11 +46,23 @@ pub fn extract_package_name(text: Arc<str>, position: Position) -> Option<String
             }
             let node_range = capture.node.range();
             if node_range.start_point <= point && node_range.end_point >= point {
-                matched = true;
+                if capture_name != "name" && capture_name != "version" {
+                    continue;
+                }
+                match_range = Some(Range {
+                    start: Position {
+                        line: node_range.start_point.row as u32,
+                        character: node_range.start_point.column as u32,
+                    },
+                    end: Position {
+                        line: node_range.end_point.row as u32,
+                        character: node_range.end_point.column as u32,
+                    },
+                });
             }
         }
-        if matched {
-            return package_name;
+        if let Some(match_range) = match_range {
+            return package_name.map(|name| (name, match_range));
         }
     }
     None
@@ -58,9 +70,8 @@ pub fn extract_package_name(text: Arc<str>, position: Position) -> Option<String
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use tower_lsp::lsp_types::Position;
-
-    use crate::Backend;
 
     #[test]
     fn test_parse_package_json() {
@@ -71,14 +82,26 @@ mod tests {
 }
 "#;
         assert_eq!(
-            Backend::extract_package_name(
+            extract_package_name(
                 package.into(),
                 Position {
                     line: 2,
                     character: 11,
                 },
             ),
-            Some("express".into())
+            Some((
+                "express".into(),
+                Range {
+                    start: Position {
+                        line: 2,
+                        character: 5,
+                    },
+                    end: Position {
+                        line: 2,
+                        character: 12,
+                    },
+                }
+            ))
         );
     }
 }

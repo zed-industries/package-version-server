@@ -79,7 +79,7 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        let Some(package_name) =
+        let Some((package_name, range)) =
             parser::extract_package_name(document, params.text_document_position_params.position)
         else {
             return Ok(None);
@@ -100,7 +100,7 @@ impl LanguageServer for Backend {
                     meta.description, meta.version, meta.homepage,
                 ),
             }),
-            range: None,
+            range: Some(range),
         }))
     }
 }
