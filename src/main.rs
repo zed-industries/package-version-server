@@ -6,7 +6,8 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, FixedOffset};
 use chrono_humanize::{Accuracy, HumanTime, Tense};
-use fetcher::PackageVersionFetcher;
+use fetcher::{FetchOptions, PackageVersionFetcher};
+use itertools::Itertools;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
@@ -37,6 +38,10 @@ impl LanguageServer for Backend {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::FULL,
                 )),
+                completion_provider: Some(CompletionOptions {
+                    trigger_characters: Some(vec![String::from(".")]),
+                    ..Default::default()
+                }),
                 ..ServerCapabilities::default()
             },
             ..InitializeResult::default()
@@ -79,29 +84,97 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        let Some((package_name, range)) =
+        let Some((package_name, range, _)) =
             parser::extract_package_name(document, params.text_document_position_params.position)
         else {
             return Ok(None);
         };
 
-        let meta = self
+        let response = self
             .fetcher
-            .get(&package_name)
+            .get(
+                &package_name,
+                FetchOptions {
+                    parse_all_versions: false,
+                },
+            )
             .await
             .ok_or_else(tower_lsp::jsonrpc::Error::internal_error)?;
-        let offset = format_time(meta.date);
+        let offset = format_time(response.latest_version.date);
 
         Ok(Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
                 value: format!(
                     "**{package_name}**\n\n{}\n\nLatest version: {} (published {offset})\n\n[{2}]({2})",
-                    meta.description, meta.version, meta.homepage,
+                    response.latest_version.description, response.latest_version.version, response.latest_version.homepage,
                 ),
             }),
             range: Some(range),
         }))
+    }
+
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let uri = params.text_document_position.text_document.uri;
+
+        if !uri.path().ends_with("package.json") {
+            return Ok(None);
+        }
+        let Some(document) = self.file_contents.lock().unwrap().get(&uri).cloned() else {
+            return Ok(None);
+        };
+
+        let Some((package_name, _, Some(version))) =
+            parser::extract_package_name(document, params.text_document_position.position)
+        else {
+            return Ok(None);
+        };
+
+        let response = self
+            .fetcher
+            .get(
+                &package_name,
+                FetchOptions {
+                    parse_all_versions: true,
+                },
+            )
+            .await
+            .ok_or_else(tower_lsp::jsonrpc::Error::internal_error)?;
+
+        if !response.failed_versions.is_empty() {
+            let some_or_all = if response.package_versions.is_empty() {
+                "all"
+            } else {
+                "some"
+            };
+            self.client
+                .log_message(
+                    MessageType::WARNING,
+                    format!(
+                        "Failed to parse {} package versions: {:?}",
+                        some_or_all, response.failed_versions
+                    ),
+                )
+                .await;
+        }
+
+        let mut completion_items: Vec<_> = response
+            .package_versions
+            .into_iter()
+            .filter_map(|package_version| {
+                if package_version.version.starts_with(&version) {
+                    Some(CompletionItem {
+                        label: package_version.version,
+                        ..Default::default()
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+        completion_items
+            .sort_by(|lhs_version, rhs_version| rhs_version.label.cmp(&lhs_version.label));
+        Ok(Some(CompletionResponse::Array(completion_items)))
     }
 }
 
