@@ -1,23 +1,16 @@
 use std::sync::Arc;
 
 use tower_lsp::lsp_types::{Position, Range};
-use tree_sitter::{Parser, Point, Query, QueryCursor};
+use tree_sitter::{Point, Query, QueryCursor, Tree};
 use tree_sitter_json::language;
 
 pub(super) struct ParseResult {
     pub package_name: String,
-    pub version: Option<String>,
+    pub version: String,
     pub match_range: Range,
 }
 
-pub fn extract_package_name(
-    text: Arc<str>,
-    position: Position,
-) -> Option<(String, Range, Option<String>)> {
-    let mut parser = Parser::new();
-    parser.set_language(&language()).ok()?;
-
-    let tree = parser.parse(text.as_bytes(), None)?;
+pub fn extract_package_name(text: Arc<str>, tree: Tree, position: Position) -> Option<ParseResult> {
     let point = Point {
         row: position.line as usize,
         column: position.character as usize,
@@ -73,8 +66,14 @@ pub fn extract_package_name(
                 });
             }
         }
-        if let Some(match_range) = match_range {
-            return package_name.map(|name| (name, match_range, version));
+        if let Some(((package_name, match_range), version)) =
+            package_name.zip(match_range).zip(version)
+        {
+            return Some(ParseResult {
+                package_name,
+                match_range,
+                version,
+            });
         }
     }
     None

@@ -81,7 +81,7 @@ pub(super) struct MetadataFromRegistry {
 pub(super) struct PackageVersion {
     pub version: String,
     pub description: String,
-    pub homepage: String,
+    pub homepage: Option<String>,
     pub date: DateTime<FixedOffset>,
 }
 
@@ -132,7 +132,7 @@ async fn fetch(
 fn parse_version_info(response: &Value, version_info: &Value) -> Option<PackageVersion> {
     let version = version_info["version"].as_str()?.to_string();
     let description = version_info["description"].as_str()?.to_string();
-    let homepage = version_info["homepage"].as_str()?.to_string();
+    let homepage = version_info["homepage"].as_str().map(ToString::to_string);
     let date_str = response["time"][version.as_str()].as_str()?;
     let date = DateTime::parse_from_rfc3339(date_str).ok()?;
     Some(PackageVersion {

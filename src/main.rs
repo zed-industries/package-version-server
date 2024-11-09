@@ -7,14 +7,16 @@ use std::sync::{Arc, Mutex};
 use chrono::{DateTime, FixedOffset};
 use chrono_humanize::{Accuracy, HumanTime, Tense};
 use fetcher::{FetchOptions, PackageVersionFetcher};
-use itertools::Itertools;
+use parser::ParseResult;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
+use tree_sitter::Parser;
+use tree_sitter_json::language;
 
 struct Backend {
     client: Client,
-    file_contents: Arc<Mutex<HashMap<Url, Arc<str>>>>,
+    file_contents: Arc<Mutex<HashMap<Url, (Arc<str>, tree_sitter::Tree)>>>,
     fetcher: PackageVersionFetcher,
 }
 
@@ -26,6 +28,12 @@ impl Backend {
             fetcher: PackageVersionFetcher::new()
                 .map_err(|_| tower_lsp::jsonrpc::Error::internal_error())?,
         })
+    }
+    fn get_parser() -> Parser {
+        let mut parser = Parser::new();
+        parser.set_language(&language()).unwrap();
+
+        parser
     }
 }
 
@@ -60,18 +68,48 @@ impl LanguageServer for Backend {
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         if let Some(change) = params.content_changes.into_iter().next() {
+            let mut parser = Self::get_parser();
+            let text: Arc<str> = change.text.into();
             self.file_contents
                 .lock()
                 .unwrap()
-                .insert(params.text_document.uri, change.text.into());
+                .entry(params.text_document.uri)
+                .and_modify(|(contents, parse_tree)| {
+                    let new_parse_tree = parser
+                        .parse(text.as_bytes(), None)
+                        .expect("We should always get a new parse tree.");
+                    *contents = text.clone();
+                    *parse_tree = new_parse_tree;
+                })
+                .or_insert_with(|| {
+                    let parse_tree = parser
+                        .parse(text.as_bytes(), None)
+                        .expect("We should always get a new parse tree.");
+                    (text, parse_tree)
+                });
         }
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        let mut parser = Self::get_parser();
+        let text: Arc<str> = params.text_document.text.into();
         self.file_contents
             .lock()
             .unwrap()
-            .insert(params.text_document.uri, params.text_document.text.into());
+            .entry(params.text_document.uri)
+            .and_modify(|(contents, parse_tree)| {
+                let new_parse_tree = parser
+                    .parse(text.as_bytes(), None)
+                    .expect("We should always get a new parse tree.");
+                *contents = text.clone();
+                *parse_tree = new_parse_tree;
+            })
+            .or_insert_with(|| {
+                let parse_tree = parser
+                    .parse(text.as_bytes(), None)
+                    .expect("We should always get a new parse tree.");
+                (text, parse_tree)
+            });
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
@@ -80,12 +118,20 @@ impl LanguageServer for Backend {
         if !uri.path().ends_with("package.json") {
             return Ok(None);
         }
-        let Some(document) = self.file_contents.lock().unwrap().get(&uri).cloned() else {
+        let Some((contents, parse_tree)) = self.file_contents.lock().unwrap().get(&uri).cloned()
+        else {
             return Ok(None);
         };
 
-        let Some((package_name, range, _)) =
-            parser::extract_package_name(document, params.text_document_position_params.position)
+        let Some(ParseResult {
+            package_name,
+            match_range,
+            ..
+        }) = parser::extract_package_name(
+            contents,
+            parse_tree,
+            params.text_document_position_params.position,
+        )
         else {
             return Ok(None);
         };
@@ -101,16 +147,20 @@ impl LanguageServer for Backend {
             .await
             .ok_or_else(tower_lsp::jsonrpc::Error::internal_error)?;
         let offset = format_time(response.latest_version.date);
-
+        let mut description = format!(
+            "**{package_name}**\n\n{}\n\nLatest version: {} (published {offset})\n\n",
+            response.latest_version.description, response.latest_version.version
+        );
+        if let Some(homepage) = response.latest_version.homepage {
+            use std::fmt::Write;
+            write!(&mut description, "[{0}]({0})", homepage).ok();
+        }
         Ok(Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
-                value: format!(
-                    "**{package_name}**\n\n{}\n\nLatest version: {} (published {offset})\n\n[{2}]({2})",
-                    response.latest_version.description, response.latest_version.version, response.latest_version.homepage,
-                ),
+                value: description,
             }),
-            range: Some(range),
+            range: Some(match_range),
         }))
     }
 
@@ -120,12 +170,20 @@ impl LanguageServer for Backend {
         if !uri.path().ends_with("package.json") {
             return Ok(None);
         }
-        let Some(document) = self.file_contents.lock().unwrap().get(&uri).cloned() else {
+        let Some((contents, parse_tree)) = self.file_contents.lock().unwrap().get(&uri).cloned()
+        else {
             return Ok(None);
         };
 
-        let Some((package_name, _, Some(version))) =
-            parser::extract_package_name(document, params.text_document_position.position)
+        let Some(ParseResult {
+            package_name,
+            version,
+            ..
+        }) = parser::extract_package_name(
+            contents,
+            parse_tree,
+            params.text_document_position.position,
+        )
         else {
             return Ok(None);
         };
@@ -164,7 +222,9 @@ impl LanguageServer for Backend {
             .filter_map(|package_version| {
                 if package_version.version.starts_with(&version) {
                     Some(CompletionItem {
-                        label: package_version.version,
+                        label: package_version.version.clone(),
+                        detail: Some(package_version.date.format("%d/%m/%Y %H:%M").to_string()),
+                        insert_text: Some(package_version.version.clone()),
                         ..Default::default()
                     })
                 } else {
