@@ -1,14 +1,16 @@
 use std::sync::Arc;
 
 use tower_lsp::lsp_types::{Position, Range};
-use tree_sitter::{Parser, Point, Query, QueryCursor};
+use tree_sitter::{Point, Query, QueryCursor, Tree};
 use tree_sitter_json::language;
 
-pub fn extract_package_name(text: Arc<str>, position: Position) -> Option<(String, Range)> {
-    let mut parser = Parser::new();
-    parser.set_language(&language()).ok()?;
+pub(super) struct ParseResult {
+    pub package_name: String,
+    pub version: String,
+    pub match_range: Range,
+}
 
-    let tree = parser.parse(text.as_bytes(), None)?;
+pub fn extract_package_name(text: Arc<str>, tree: Tree, position: Position) -> Option<ParseResult> {
     let point = Point {
         row: position.line as usize,
         column: position.character as usize,
@@ -36,11 +38,14 @@ pub fn extract_package_name(text: Arc<str>, position: Position) -> Option<(Strin
     let capture_names = query.capture_names();
     for m in matches {
         let mut package_name = None;
+        let mut version = None;
         let mut match_range = None;
         for capture in m.captures {
             let capture_name = capture_names[capture.index as usize];
             if capture_name == "name" {
                 package_name = Some(capture.node.utf8_text(text.as_bytes()).ok()?.to_string());
+            } else if capture_name == "version" {
+                version = Some(capture.node.utf8_text(text.as_bytes()).ok()?.to_string());
             } else if capture_name == "root_name" {
                 continue;
             }
@@ -61,8 +66,14 @@ pub fn extract_package_name(text: Arc<str>, position: Position) -> Option<(Strin
                 });
             }
         }
-        if let Some(match_range) = match_range {
-            return package_name.map(|name| (name, match_range));
+        if let Some(((package_name, match_range), version)) =
+            package_name.zip(match_range).zip(version)
+        {
+            return Some(ParseResult {
+                package_name,
+                match_range,
+                version,
+            });
         }
     }
     None

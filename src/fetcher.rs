@@ -5,6 +5,7 @@ use std::{
 };
 
 use chrono::{DateTime, FixedOffset};
+use itertools::{Either, Itertools};
 use reqwest::Client;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -35,7 +36,11 @@ impl PackageVersionFetcher {
             cache: Default::default(),
         })
     }
-    pub(super) async fn get(&self, package_name: &str) -> Option<MetadataFromRegistry> {
+    pub(super) async fn get(
+        &self,
+        package_name: &str,
+        fetch_options: FetchOptions,
+    ) -> Option<MetadataFromRegistry> {
         {
             let lock = self.cache.lock().await;
             let cached_entry = lock.get(package_name);
@@ -45,7 +50,7 @@ impl PackageVersionFetcher {
                 }
             }
         }
-        let latest_version = fetch_latest_version(&self.client, package_name).await?;
+        let latest_version = fetch(&self.client, package_name, fetch_options).await?;
         {
             match self.cache.lock().await.entry(package_name.into()) {
                 Entry::Occupied(mut entry) => {
@@ -60,22 +65,34 @@ impl PackageVersionFetcher {
     }
 }
 
+pub(super) struct FetchOptions {
+    pub parse_all_versions: bool,
+}
+
 #[derive(Clone)]
 pub(super) struct MetadataFromRegistry {
     fetch_timestamp: Instant,
+    pub latest_version: PackageVersion,
+    pub package_versions: Vec<PackageVersion>,
+    pub failed_versions: Vec<String>,
+}
+
+#[derive(Clone)]
+pub(super) struct PackageVersion {
     pub version: String,
     pub description: String,
-    pub homepage: String,
+    pub homepage: Option<String>,
     pub date: DateTime<FixedOffset>,
 }
 
-async fn fetch_latest_version(
+async fn fetch(
     client: &reqwest::Client,
     package_name: &str,
+    fetch_options: FetchOptions,
 ) -> Option<MetadataFromRegistry> {
     let package_name = urlencoding::encode(package_name);
     let url = format!("https://registry.npmjs.org/{}", package_name);
-    let resp = client
+    let response = client
         .get(url)
         .send()
         .await
@@ -83,16 +100,43 @@ async fn fetch_latest_version(
         .json::<Value>()
         .await
         .ok()?;
-    let version = resp["dist-tags"]["latest"].as_str()?;
-    let version_info = &resp["versions"][version];
-    let version_str = version_info["version"].as_str()?.to_string();
-    let description = version_info["description"].as_str()?.to_string();
-    let homepage = version_info["homepage"].as_str()?.to_string();
-    let date_str = resp["time"][version].as_str()?;
-    let date = DateTime::parse_from_rfc3339(date_str).ok()?;
+    let latest_version_str = response["dist-tags"]["latest"].as_str()?;
+    let Some(latest_version) =
+        parse_version_info(&response, &response["versions"][latest_version_str])
+    else {
+        return None;
+    };
+
+    let (package_versions, failed_versions) = if fetch_options.parse_all_versions {
+        response["versions"].as_object()?.into_iter().partition_map(
+            |(version_name, version_info)| {
+                if let Some(parsed_version_info) = parse_version_info(&response, &version_info) {
+                    Either::Left(parsed_version_info)
+                } else {
+                    Either::Right(version_name.clone())
+                }
+            },
+        )
+    } else {
+        (vec![], vec![])
+    };
+
     Some(MetadataFromRegistry {
         fetch_timestamp: Instant::now(),
-        version: version_str,
+        latest_version,
+        package_versions,
+        failed_versions,
+    })
+}
+
+fn parse_version_info(response: &Value, version_info: &Value) -> Option<PackageVersion> {
+    let version = version_info["version"].as_str()?.to_string();
+    let description = version_info["description"].as_str()?.to_string();
+    let homepage = version_info["homepage"].as_str().map(ToString::to_string);
+    let date_str = response["time"][version.as_str()].as_str()?;
+    let date = DateTime::parse_from_rfc3339(date_str).ok()?;
+    Some(PackageVersion {
+        version,
         description,
         homepage,
         date,
