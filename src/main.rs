@@ -216,20 +216,28 @@ impl LanguageServer for Backend {
                 .await;
         }
 
+        let mut query = version.to_string();
+        for prefix in [">", "<", ">=", "<=", "=", "==", "!=", "===", "!==", "~"] {
+            if let Some(stripped) = query.strip_prefix(prefix) {
+                query = stripped.to_string();
+                break;
+            }
+        }
         let mut completion_items: Vec<_> = response
             .package_versions
             .into_iter()
             .filter_map(|package_version| {
-                if package_version.version.starts_with(&version) {
-                    Some(CompletionItem {
-                        label: package_version.version.clone(),
-                        detail: Some(package_version.date.format("%d/%m/%Y %H:%M").to_string()),
-                        insert_text: Some(package_version.version.clone()),
-                        ..Default::default()
-                    })
-                } else {
-                    None
+                let label = package_version.version.to_string();
+                if !label.starts_with(&query) {
+                    return None;
                 }
+                let insert_text = Some(label.clone());
+                Some(CompletionItem {
+                    label,
+                    insert_text,
+                    detail: Some(package_version.date.format("%d/%m/%Y %H:%M").to_string()),
+                    ..Default::default()
+                })
             })
             .collect();
         completion_items
