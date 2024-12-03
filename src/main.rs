@@ -67,6 +67,9 @@ impl LanguageServer for Backend {
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
+        if !params.text_document.uri.path().ends_with("package.json") {
+            return;
+        }
         if let Some(change) = params.content_changes.into_iter().next() {
             let mut parser = Self::get_parser();
             let text: Arc<str> = change.text.into();
@@ -91,6 +94,9 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        if !params.text_document.uri.path().ends_with("package.json") {
+            return;
+        }
         let mut parser = Self::get_parser();
         let text: Arc<str> = params.text_document.text.into();
         self.file_contents
