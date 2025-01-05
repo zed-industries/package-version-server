@@ -83,6 +83,7 @@ pub fn extract_package_name(text: Arc<str>, tree: Tree, position: Position) -> O
 mod tests {
     use super::*;
     use tower_lsp::lsp_types::Position;
+    use tree_sitter::Parser;
 
     #[test]
     fn test_parse_package_json() {
@@ -92,27 +93,29 @@ mod tests {
   }
 }
 "#;
+        let mut parser = Parser::new();
+        parser.set_language(&language()).unwrap();
+        let res = extract_package_name(
+            package.into(),
+            parser.parse(&package, None).unwrap(),
+            Position {
+                line: 2,
+                character: 11,
+            },
+        ).unwrap();
         assert_eq!(
-            extract_package_name(
-                package.into(),
-                Position {
+            res.match_range,
+            Range {
+                start: Position {
                     line: 2,
-                    character: 11,
+                    character: 5,
                 },
-            ),
-            Some((
-                "express".into(),
-                Range {
-                    start: Position {
-                        line: 2,
-                        character: 5,
-                    },
-                    end: Position {
-                        line: 2,
-                        character: 12,
-                    },
-                }
-            ))
+                end: Position {
+                    line: 2,
+                    character: 12,
+                },
+            }
         );
+        assert_eq!(res.package_name, "express");
     }
 }
