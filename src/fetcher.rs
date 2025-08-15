@@ -28,7 +28,11 @@ pub(super) struct PackageVersionFetcher {
 const REFRESH_DURATION: Duration = Duration::from_secs(30);
 
 impl PackageVersionFetcher {
-    pub(super) fn new() -> reqwest::Result<Self> {
+    package_registry;
+
+    pub(super) fn new(package_registry: Option<String>) -> reqwest::Result<Self> {
+        self.package_registry = package_registry.unwrap_or_else(|| "https://registry.npmjs.org".to_string());
+
         let client = reqwest::Client::builder()
             .user_agent(APP_USER_AGENT)
             .build()?;
@@ -92,7 +96,7 @@ async fn fetch(
     fetch_options: FetchOptions,
 ) -> Option<MetadataFromRegistry> {
     let package_name = urlencoding::encode(package_name);
-    let url = format!("https://registry.npmjs.org/{}", package_name);
+    let url = format!("{}/{}", self.package_registry, package_name);
     let response = client
         .get(url)
         .send()
