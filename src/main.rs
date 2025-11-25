@@ -229,7 +229,7 @@ impl LanguageServer for Backend {
                 break;
             }
         }
-        let mut completion_items: Vec<_> = response
+        let mut completion_items_with_labels: Vec<_> = response
             .package_versions
             .into_iter()
             .filter_map(|package_version| {
@@ -237,17 +237,28 @@ impl LanguageServer for Backend {
                 if !label.starts_with(&query) {
                     return None;
                 }
-                let insert_text = Some(label.clone());
-                Some(CompletionItem {
-                    label,
-                    insert_text,
-                    detail: Some(package_version.date.format("%d/%m/%Y %H:%M").to_string()),
-                    ..Default::default()
-                })
+                Some((package_version, label))
             })
             .collect();
-        completion_items
-            .sort_by(|lhs_version, rhs_version| rhs_version.label.cmp(&lhs_version.label));
+
+        completion_items_with_labels.sort_by(|(lhs, _), (rhs, _)| rhs.version.cmp(&lhs.version));
+
+        let completion_items: Vec<_> = completion_items_with_labels
+            .into_iter()
+            .enumerate()
+            .map(|(index, (package_version, label))| {
+                let insert_text = Some(label.clone());
+                let sort_text = Some(format!("{:08}", index));
+                CompletionItem {
+                    label,
+                    insert_text,
+                    sort_text,
+                    detail: Some(package_version.date.format("%d/%m/%Y %H:%M").to_string()),
+                    ..Default::default()
+                }
+            })
+            .collect();
+
         Ok(Some(CompletionResponse::Array(completion_items)))
     }
 }
