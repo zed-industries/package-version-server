@@ -22,13 +22,18 @@ static APP_USER_AGENT: &str = concat!(
 pub(super) struct PackageVersionFetcher {
     client: Client,
     cache: Arc<Mutex<HashMap<PackageName, MetadataFromRegistry>>>,
+    scope_registries: HashMap<String, String>,
+    default_registry: String,
 }
 
 /// How long do we keep data about a package around before requerying it the second time.
 const REFRESH_DURATION: Duration = Duration::from_secs(30);
 
 impl PackageVersionFetcher {
-    pub(super) fn new() -> reqwest::Result<Self> {
+    pub(super) fn new(scope_registries: HashMap<String, String>, default_registry: Option<String>) -> reqwest::Result<Self> {
+        self.scope_registries = scope_registries;
+        self.default_registry = default_registry.unwrap_or_else(|| "https://registry.npmjs.org".to_string());
+
         let client = reqwest::Client::builder()
             .user_agent(APP_USER_AGENT)
             .build()?;
@@ -91,8 +96,17 @@ async fn fetch(
     package_name: &str,
     fetch_options: FetchOptions,
 ) -> Option<MetadataFromRegistry> {
+
+    let selected_registry = if package_name.starts_with('@') && package_name.contains('/') {
+        let scope = package_name.split('/').next().unwrap();
+        scope_to_registry.get(scope).unwrap_or(&self.default_registry)
+    } else {
+        &self.default_registry
+    };
+    
     let package_name = urlencoding::encode(package_name);
-    let url = format!("https://registry.npmjs.org/{}", package_name);
+
+    let url = format!("{}/{}", selected_registry, package_name);
     let response = client
         .get(url)
         .send()
