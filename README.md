@@ -23,6 +23,8 @@ Open a `package.json` file in your code editor, and hover over any dependency ke
 
 Feel free to submit issues or pull requests. Contributions are welcome!
 
+New releases are published automatically whenever a new version tag is added on main branch.
+
 ## License
 
 This project is licensed under the MIT License.
