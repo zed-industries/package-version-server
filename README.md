@@ -13,7 +13,26 @@ Package Version Server is a language server that enhances your development exper
 
 ## Configuration
 
-No specific configuration needed. The server will automatically start and provide package versions when you hover over dependencies in `package.json` files.
+The server reads the user's npm configuration when it starts. It uses the file specified by `NPM_CONFIG_USERCONFIG` (or `npm_config_userconfig`), falling back to `~/.npmrc`.
+
+Supported settings include:
+
+- `registry` for unscoped packages
+- `@scope:registry` for scoped packages
+- Registry-specific `:_authToken` bearer tokens
+- `strict-ssl` and `strictssl`
+- Environment-variable references such as `${NPM_TOKEN}`
+
+For example:
+
+```ini
+@internal:registry=https://artifactory.example.com/artifactory/api/npm/npm_prod_vir/
+@internal-platform:registry=https://artifactory.example.com/api/npm/npm_prod_vir/
+//artifactory.example.com/artifactory/api/npm/npm_prod_vir/:_authToken=${NPM_TOKEN}
+strict-ssl=false
+```
+
+Authentication tokens are only sent to registry URLs matching the token's host and path, including after redirects. Explicit configuration files and configured registry URLs must be valid; the server fails to start rather than silently falling back to the public registry. Restart the server after changing the npm configuration.
 
 ## Usage
 
