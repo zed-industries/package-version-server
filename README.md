@@ -32,7 +32,7 @@ For example:
 strict-ssl=false
 ```
 
-Authentication tokens are only sent to registry URLs matching the token's host and path. Restart the server after changing the npm configuration.
+Authentication tokens are only sent to registry URLs matching the token's host and path, including after redirects. Explicit configuration files and configured registry URLs must be valid; the server fails to start rather than silently falling back to the public registry. Restart the server after changing the npm configuration.
 
 ## Usage
 

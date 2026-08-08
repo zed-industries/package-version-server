@@ -24,12 +24,11 @@ struct Backend {
 }
 
 impl Backend {
-    fn new(lsp_client: Client) -> Result<Self> {
+    fn new(lsp_client: Client) -> anyhow::Result<Self> {
         Ok(Self {
             client: lsp_client,
             file_contents: Default::default(),
-            fetcher: PackageVersionFetcher::new()
-                .map_err(|_| tower_lsp::jsonrpc::Error::internal_error())?,
+            fetcher: PackageVersionFetcher::new()?,
         })
     }
     fn get_parser() -> Parser {
@@ -284,7 +283,9 @@ async fn main() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
-    let (service, socket) =
-        LspService::new(|client| Backend::new(client).expect("Failed to initialize backend"));
+    let (service, socket) = LspService::new(|client| {
+        Backend::new(client)
+            .unwrap_or_else(|error| panic!("Failed to initialize backend: {error:#}"))
+    });
     Server::new(stdin, stdout, socket).serve(service).await;
 }

@@ -6,7 +6,7 @@ use std::{
 
 use chrono::{DateTime, FixedOffset};
 use itertools::{Either, Itertools};
-use reqwest::Client;
+use reqwest::{header::LOCATION, Client, Response, StatusCode, Url};
 
 use crate::npmrc::NpmConfig;
 use semver_rs::Parseable;
@@ -29,13 +29,15 @@ pub(super) struct PackageVersionFetcher {
 
 /// How long do we keep data about a package around before requerying it the second time.
 const REFRESH_DURATION: Duration = Duration::from_secs(30);
+const MAX_REDIRECTS: usize = 10;
 
 impl PackageVersionFetcher {
-    pub(super) fn new() -> reqwest::Result<Self> {
-        let npm_config = NpmConfig::load();
+    pub(super) fn new() -> anyhow::Result<Self> {
+        let npm_config = NpmConfig::load()?;
         let client = reqwest::Client::builder()
             .user_agent(APP_USER_AGENT)
             .danger_accept_invalid_certs(!npm_config.strict_ssl())
+            .redirect(reqwest::redirect::Policy::none())
             .build()?;
         Ok(Self {
             client,
@@ -100,11 +102,11 @@ async fn fetch(
     fetch_options: FetchOptions,
 ) -> Option<MetadataFromRegistry> {
     let url = npm_config.package_url(package_name)?;
-    let mut request = client.get(url.clone());
-    if let Some(auth_token) = npm_config.auth_token_for(&url) {
-        request = request.bearer_auth(auth_token);
-    }
-    let response = request.send().await.ok()?.json::<Value>().await.ok()?;
+    let response = send_registry_request(client, npm_config, url)
+        .await?
+        .json::<Value>()
+        .await
+        .ok()?;
     let latest_version_str = response["dist-tags"]["latest"].as_str()?;
     let latest_version = parse_version_info(&response, &response["versions"][latest_version_str])?;
 
@@ -130,6 +132,41 @@ async fn fetch(
     })
 }
 
+async fn send_registry_request(
+    client: &Client,
+    npm_config: &NpmConfig,
+    mut url: Url,
+) -> Option<Response> {
+    for _ in 0..=MAX_REDIRECTS {
+        let mut request = client.get(url.clone());
+        if let Some(auth_token) = npm_config.auth_token_for(&url) {
+            request = request.bearer_auth(auth_token);
+        }
+        let response = request.send().await.ok()?;
+        if !matches!(
+            response.status(),
+            StatusCode::MOVED_PERMANENTLY
+                | StatusCode::FOUND
+                | StatusCode::SEE_OTHER
+                | StatusCode::TEMPORARY_REDIRECT
+                | StatusCode::PERMANENT_REDIRECT
+        ) {
+            return Some(response);
+        }
+
+        let location = response.headers().get(LOCATION)?.to_str().ok()?;
+        let next_url = url.join(location).ok()?;
+        if !matches!(next_url.scheme(), "http" | "https")
+            || (url.scheme() == "https" && next_url.scheme() != "https")
+        {
+            return None;
+        }
+        url = next_url;
+    }
+
+    None
+}
+
 fn parse_version_info(response: &Value, version_info: &Value) -> Option<PackageVersion> {
     let version_str = version_info["version"].as_str()?;
     let version = semver_rs::Version::parse(
@@ -150,4 +187,63 @@ fn parse_version_info(response: &Value, version_info: &Value) -> Option<PackageV
         homepage,
         date,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    #[tokio::test]
+    async fn removes_path_scoped_tokens_when_redirecting() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for response in [
+                "HTTP/1.1 302 Found\r\nLocation: /public/final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+            ] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                loop {
+                    let mut buffer = [0; 1024];
+                    let read = stream.read(&mut buffer).await.unwrap();
+                    request.extend_from_slice(&buffer[..read]);
+                    if read == 0 || request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                requests.push(String::from_utf8(request).unwrap());
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+            requests
+        });
+
+        let config = NpmConfig::parse(&format!(
+            "registry=http://{address}/private/\n//{address}/private/:_authToken=secret"
+        ))
+        .unwrap();
+        let client = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let response = send_registry_request(
+            &client,
+            &config,
+            config.package_url("example-package").unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let requests = server.await.unwrap();
+        assert!(requests[0]
+            .to_ascii_lowercase()
+            .contains("authorization: bearer secret"));
+        assert!(!requests[1].to_ascii_lowercase().contains("authorization:"));
+    }
 }
