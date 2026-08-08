@@ -1,4 +1,5 @@
 mod fetcher;
+mod npmrc;
 mod parser;
 
 use std::collections::HashMap;
@@ -14,9 +15,11 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 use tree_sitter::Parser;
 use tree_sitter_json::language;
 
+type OpenFiles = HashMap<Url, (Arc<str>, tree_sitter::Tree)>;
+
 struct Backend {
     client: Client,
-    file_contents: Arc<Mutex<HashMap<Url, (Arc<str>, tree_sitter::Tree)>>>,
+    file_contents: Arc<Mutex<OpenFiles>>,
     fetcher: PackageVersionFetcher,
 }
 

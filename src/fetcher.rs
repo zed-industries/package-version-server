@@ -7,6 +7,8 @@ use std::{
 use chrono::{DateTime, FixedOffset};
 use itertools::{Either, Itertools};
 use reqwest::Client;
+
+use crate::npmrc::NpmConfig;
 use semver_rs::Parseable;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -21,6 +23,7 @@ static APP_USER_AGENT: &str = concat!(
 );
 pub(super) struct PackageVersionFetcher {
     client: Client,
+    npm_config: NpmConfig,
     cache: Arc<Mutex<HashMap<PackageName, MetadataFromRegistry>>>,
 }
 
@@ -29,11 +32,14 @@ const REFRESH_DURATION: Duration = Duration::from_secs(30);
 
 impl PackageVersionFetcher {
     pub(super) fn new() -> reqwest::Result<Self> {
+        let npm_config = NpmConfig::load();
         let client = reqwest::Client::builder()
             .user_agent(APP_USER_AGENT)
+            .danger_accept_invalid_certs(!npm_config.strict_ssl())
             .build()?;
         Ok(Self {
             client,
+            npm_config,
             cache: Default::default(),
         })
     }
@@ -51,7 +57,8 @@ impl PackageVersionFetcher {
                 }
             }
         }
-        let latest_version = fetch(&self.client, package_name, fetch_options).await?;
+        let latest_version =
+            fetch(&self.client, &self.npm_config, package_name, fetch_options).await?;
         {
             match self.cache.lock().await.entry(package_name.into()) {
                 Entry::Occupied(mut entry) => {
@@ -88,30 +95,23 @@ pub(super) struct PackageVersion {
 
 async fn fetch(
     client: &reqwest::Client,
+    npm_config: &NpmConfig,
     package_name: &str,
     fetch_options: FetchOptions,
 ) -> Option<MetadataFromRegistry> {
-    let package_name = urlencoding::encode(package_name);
-    let url = format!("https://registry.npmjs.org/{}", package_name);
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .ok()?
-        .json::<Value>()
-        .await
-        .ok()?;
+    let url = npm_config.package_url(package_name)?;
+    let mut request = client.get(url.clone());
+    if let Some(auth_token) = npm_config.auth_token_for(&url) {
+        request = request.bearer_auth(auth_token);
+    }
+    let response = request.send().await.ok()?.json::<Value>().await.ok()?;
     let latest_version_str = response["dist-tags"]["latest"].as_str()?;
-    let Some(latest_version) =
-        parse_version_info(&response, &response["versions"][latest_version_str])
-    else {
-        return None;
-    };
+    let latest_version = parse_version_info(&response, &response["versions"][latest_version_str])?;
 
     let (package_versions, failed_versions) = if fetch_options.parse_all_versions {
         response["versions"].as_object()?.into_iter().partition_map(
             |(version_name, version_info)| {
-                if let Some(parsed_version_info) = parse_version_info(&response, &version_info) {
+                if let Some(parsed_version_info) = parse_version_info(&response, version_info) {
                     Either::Left(parsed_version_info)
                 } else {
                     Either::Right(version_name.clone())
